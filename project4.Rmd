@@ -1,0 +1,154 @@
+---
+title: "Project Assignment- Weight lifting Data Analysis Report"
+author: "Pham Khanh"
+date: "Tuesday, August 18, 2015"
+output: html_document
+---
+
+## Introduction  
+This project aims to use the data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to predict the manner in which they do the weight lifting. This is a typical classification problem where the quality weight lifting manner are classified into 5 type : A,B, C,D and E stored in the variable "classe" of training set. 
+
+## Library in use  
+```{r, cache = T, warning=F}
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+```
+### Read the Data
+After downloaded from the source, the data is loaded into 2 dataframes.  
+```{r, cache = T, warning=F}
+train_raw <- read.csv("pml-training.csv")
+test_raw <- read.csv("pml-testing.csv")
+#View(train_raw)
+#View(test_raw)
+```
+From the table, the training data set has 19622 examples and 160 variables, the testing set includes 20 observations and 160 variables. The "classe" variable is the outcome to predict. 
+
+### Preprocessing
+Exploting the training data set, we can observe that following variables are not useful for the study:
+  + There are variables with a lot of missing values;
+  + There are variables which are almost constant across observations;
+  + The experiments for each group of classes in training set is ordered by time; therefore, any of variables indicating the order of observation are highly correlated with the classe. Including any of them in the model will provide a high accuracy result but not reflect the essence of our study, an example is given in the plot for variable X with color by classe. This type of ordering variables includes "X", "raw_timestamp_part_1", "cvtd_timestamp" and "num_window". Similarly, the "user" variable will not available in the general context, so we shouldn't use it as predictor.
+
+
+```{r, cache = T}
+plot(train_raw$X, train_raw$user_name, col=train_raw$classe)
+```
+
+From these observations, we preprocess the data by removing above-mentioned variables;
+
+
+```{r, cache = T}
+# find near zero covariates
+near_zero <- nearZeroVar(train_raw, saveMetrics = T)
+
+# find variables with more than 90% missing values
+miss_val <- sapply(colnames(train_raw), function(x) if(sum(is.na(train_raw[, x])) > 0.9*nrow(train_raw)){return(T)}else{return(F)})
+remove_var <- miss_val|near_zero$nzv
+training <- train_raw[, !remove_var]
+# remove context variable (time related + user)
+training <- training[,-c(1:6)]
+
+# processing the testing set with the same procedure
+testing <- test_raw[, !remove_var]
+# remove remove context variable (time related + user)
+testing <- testing[,-c(1:6)]
+
+# calculate correlations
+cor <- abs(sapply(colnames(training[, -ncol(training)]), function(x) cor(as.numeric(training[, x]), as.numeric(training$classe))))
+hist(cor)
+```
+
+
+Since there is not strong correlation between predictors and outcome, linear model seems to be not suitable for this probelm. Therefore, we try 3 different classification algorithms: Decision Tree, Boosting and Random Forests for our data.         
+
+
+### Partition the data
+Then, we can split the cleaned training set into a pure training data set (70%) and a validation data set (30%). 
+```{r, cache = T}
+set.seed(22519)
+inTrain <- createDataPartition(training$classe, p=0.70, list=F)
+train_df <- training[inTrain, ]
+test_df <- training[-inTrain, ]
+```
+
+
+
+### Decision Tree model
+We try to fit a simple tree model with 10-fold cross-validation to our data.
+```{r tree, cache = T}
+# run the algorithm in parallel to reduce the execution time
+library(foreach)
+library(doParallel)
+registerDoParallel(cores=5)
+set.seed(1987)
+mod_tree <- train(classe~., data=train_df, method="rpart",trControl = trainControl(method = "cv", number = 10))
+prp(mod_tree$finalModel) # fast plot
+pred_tree <- predict(mod_tree, test_df)
+confusionMatrix(test_df$classe, pred_tree)
+```
+
+The Tree model is not a good option since the accuracy is just slightly better than random choice.
+
+### Boosting model
+* Build model with boosting algorithm and 10-fold cross validation to predict `classe` with all other predictors.    
+* Find the accuracy when applying to validation data set    
+
+```{r boost, cache = T}
+set.seed(1988)
+mod_boost <- train(classe ~ ., method = "gbm", data = train_df, verbose = F, trControl = trainControl(method = "cv", number = 10))
+pred_boost <- predict(mod_boost, test_df)
+confusionMatrix(test_df$classe, pred_boost)
+```
+
+* The Boosting algorithm has done a good classification job with the accuracy = 0.9645. 
+
+### Random forests model   
+* Since Random Forest is expected to be a good algorithm interm of accuracy, we try to apply it to our training data set with 10-fold cross validation. Then, we estimate the accuracy and out-of-sample error using validation set.    
+          
+
+```{r rf, cache = T}
+set.seed(1998)
+mod_rf <- train(classe ~ ., method = "rf", data = train_df, importance = T, trControl = trainControl(method = "cv", number = 10))
+
+pred_rf <- predict(mod_rf, test_df)
+confusionMatrix(test_df$classe, pred_rf)
+
+```
+
+
+### Model selection and output  
+* From the result in previous section, we choose the random forest (which has the highest accuracy) as the final model for predicting the test data.        
+* The final random forests model contains 500 trees with 2 variables tried at each split. 
+* The out-of-sample error rate is estimated as 0.67%            
+* Finally, we apply the model to the test set and use provided script for submission.   
+
+```{r result , message = F, cache=T}
+# selected model
+mod_rf$finalModel
+# final result for submission
+prediction <- as.character(predict(mod_rf, testing))
+prediction
+```
+
+
+```{r results, eval = F}
+# write prediction files
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("./prediction/problem_id_", i, ".txt")
+    write.table(x[i], file = filename, quote = FALSE, row.names = FALSE, col.names = FALSE)
+  }
+}
+pml_write_files(prediction)
+```
+
+
+
+
+
+
+
+
